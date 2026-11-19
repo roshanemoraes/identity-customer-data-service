@@ -36,7 +36,8 @@ set -euo pipefail
 TABLE='postgres integration-test
 sqlite integration-test-sqlite
 mysql integration-test-mysql
-mssql integration-test-mssql'
+mssql integration-test-mssql
+oracle integration-test-oracle'
 
 OUTPUT="${GITHUB_OUTPUT:-/dev/stdout}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
