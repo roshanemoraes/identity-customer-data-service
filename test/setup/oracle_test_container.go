@@ -57,6 +57,7 @@ const (
 	oracleTestPassword = "Cds_Test_Pass1"
 
 	oracleReadyTimeout = 10 * time.Minute
+	oracleProbe        = "SELECT 1 FROM dual"
 )
 
 // TestOracle is a running Oracle container and the settings needed to reach it.
@@ -137,7 +138,7 @@ func SetupTestOracle(ctx context.Context) (*TestOracle, error) {
 	}
 	instance.DB = db
 
-	if err := waitForQuery(ctx, db); err != nil {
+	if err := waitForStatement(ctx, db, oracleProbe); err != nil {
 		_ = container.Terminate(ctx)
 		return nil, err
 	}
@@ -174,7 +175,7 @@ func (o *TestOracle) createUser(ctx context.Context) error {
 	}
 	defer func() { _ = admin.Close() }()
 
-	if err := waitForQuery(ctx, admin); err != nil {
+	if err := waitForStatement(ctx, admin, oracleProbe); err != nil {
 		return err
 	}
 	for _, statement := range []string{
