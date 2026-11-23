@@ -18,8 +18,9 @@
 
 package scripts
 
-// oracleNow is the current time in UTC
-const oracleNow = "FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC')"
+// oracleNow is the current time in UTC, with the numeric offset +00:00 rather
+// than the zone name UTC, which go-oracledb cannot decode.
+const oracleNow = "FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00')"
 
 // oracleStatements contains statements that need Oracle-specific versions.
 var oracleStatements = map[string]string{
@@ -146,23 +147,30 @@ var oracleStatements = map[string]string{
 			updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
 
-	"CDS-ORG-07": `WITH chain (org_id, parent_org_id, hops) AS (
+	// The recursive chain sits inside a SELECT because go-oracledb refuses a
+	// statement that opens with WITH.
+	"CDS-ORG-07": `SELECT org_id, org_handle, org_name, parent_org_id, primary_org_id, status,
+		created_at, updated_at
+		FROM (WITH chain (org_id, parent_org_id, hops) AS (
 		SELECT org_id, parent_org_id, 0 FROM organizations WHERE org_id = $1
 		UNION ALL
 		SELECT o.org_id, o.parent_org_id, c.hops + 1 FROM organizations o JOIN chain c ON o.org_id = c.parent_org_id
 		WHERE c.hops < 64)
 		SELECT o.org_id, o.org_handle, o.org_name, o.parent_org_id, o.primary_org_id, o.status,
-		o.created_at, o.updated_at FROM organizations o JOIN chain c ON c.org_id = o.org_id
-		ORDER BY c.hops DESC`,
+		o.created_at, o.updated_at, c.hops FROM organizations o JOIN chain c ON c.org_id = o.org_id)
+		ORDER BY hops DESC`,
 
-	"CDS-ORG-09": `WITH chain (org_id, parent_org_id, hops) AS (
+	"CDS-ORG-09": `SELECT org_id, org_handle, org_name, parent_org_id, primary_org_id, status,
+		created_at, updated_at, hops
+		FROM (WITH chain (org_id, parent_org_id, hops) AS (
 		SELECT org_id, parent_org_id, 0 FROM organizations WHERE org_id = $1
 		UNION ALL
 		SELECT o.org_id, o.parent_org_id, c.hops + 1 FROM organizations o JOIN chain c ON o.org_id = c.parent_org_id
 		WHERE c.hops < 64)
 		SELECT o.org_id, o.org_handle, o.org_name, o.parent_org_id, o.primary_org_id, o.status,
 		o.created_at, o.updated_at, c.hops FROM organizations o JOIN chain c ON c.org_id = o.org_id
-		WHERE c.hops > 0 ORDER BY c.hops`,
+		WHERE c.hops > 0)
+		ORDER BY hops`,
 
 	"CDS-PRF-01": `MERGE INTO profiles t
 		USING (SELECT $1 AS profile_id FROM dual) s ON (t.profile_id = s.profile_id)

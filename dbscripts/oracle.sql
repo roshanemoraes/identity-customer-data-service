@@ -25,8 +25,8 @@ BEGIN
     (
         profile_id          VARCHAR2(36 CHAR) NOT NULL PRIMARY KEY,
         user_id             VARCHAR2(255 CHAR),
-        created_at          TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
-        updated_at          TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
+        created_at          TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
+        updated_at          TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
         location            VARCHAR2(255 CHAR),
         origin_country      VARCHAR2(255 CHAR),
         list_profile        NUMBER(1) DEFAULT 1 CHECK (list_profile IN (0, 1)),
@@ -82,8 +82,8 @@ BEGIN
         unification_method VARCHAR2(255 CHAR) DEFAULT 'deterministic',
         match_strength     VARCHAR2(20 CHAR),
         mismatch_strength  VARCHAR2(20 CHAR),
-        created_at         TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
-        updated_at         TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
+        created_at         TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
+        updated_at         TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
         org_id             VARCHAR2(255 CHAR) NOT NULL
     )~');
     -- match_strength is NULL to derive the strength from attribute_type, and a value overrides it. It has no
@@ -108,8 +108,8 @@ BEGIN
     (
         app_id     VARCHAR2(255 CHAR) NOT NULL PRIMARY KEY,
         client_id  VARCHAR2(255 CHAR),
-        created_at TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
-        updated_at TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
+        created_at TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
+        updated_at TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
         org_id     VARCHAR2(255 CHAR) NOT NULL
     )~');
     ddl(q'~CREATE UNIQUE INDEX uq_applications_org_client ON applications
@@ -143,7 +143,7 @@ BEGIN
         profile_id     VARCHAR2(36 CHAR) REFERENCES profiles (profile_id) ON DELETE CASCADE,
         category_id    VARCHAR2(36 CHAR) REFERENCES consent_categories (category_identifier) ON DELETE CASCADE,
         consent_status NUMBER(1) NOT NULL CHECK (consent_status IN (0, 1)),
-        consented_at   TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
+        consented_at   TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
         CONSTRAINT uq_profile_consents UNIQUE (profile_id, category_id)
     )~');
 
@@ -184,8 +184,8 @@ BEGIN
         parent_org_id  VARCHAR2(255 CHAR),
         primary_org_id VARCHAR2(255 CHAR) NOT NULL,
         status         VARCHAR2(32 CHAR) NOT NULL,
-        created_at     TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
-        updated_at     TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL
+        created_at     TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
+        updated_at     TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL
     )~');
     ddl('CREATE INDEX idx_organizations_primary ON organizations (primary_org_id)');
 
@@ -232,7 +232,7 @@ BEGIN
         status               VARCHAR2(50 CHAR) DEFAULT 'PENDING' NOT NULL,
         match_reason         CLOB,
         score_breakdown      CLOB DEFAULT '{}',
-        created_at           TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
+        created_at           TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
         resolved_at          TIMESTAMP(6) WITH TIME ZONE,
         resolved_by          VARCHAR2(255 CHAR),
         resolution_notes     CLOB,
@@ -256,7 +256,7 @@ BEGIN
         match_score     NUMBER(5, 4),
         score_breakdown CLOB DEFAULT '{}',
         rejected_by     VARCHAR2(255 CHAR),
-        rejected_at     TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
+        rejected_at     TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), '+00:00') NOT NULL,
         org_id          VARCHAR2(255 CHAR) NOT NULL,
         CONSTRAINT uq_rejection_pair UNIQUE (profile_id_1, profile_id_2)
     )~');
