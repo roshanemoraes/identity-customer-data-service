@@ -19,7 +19,6 @@
 package provider
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -45,52 +44,55 @@ func Test_getDBConfig_oracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dbConfig.driverName != database.DriverOracle {
-		t.Errorf("expected the oracle driver, got %q", dbConfig.driverName)
-	}
-
-	parsed, err := url.Parse(dbConfig.dsn)
-	if err != nil {
-		t.Fatalf("the DSN %q is not a URL: %v", dbConfig.dsn, err)
-	}
-	password, _ := parsed.User.Password()
-	if parsed.Scheme != "oracle" || parsed.Host != "db.example.com:1522" || parsed.Path != "/FREEPDB1" ||
-		parsed.User.Username() != "cdsuser" || password != "p@ss/word" {
-		t.Errorf("unexpected DSN %q", dbConfig.dsn)
-	}
-	query := parsed.Query()
-	for key, want := range map[string]string{
-		"SSL": "true", "SSL VERIFY": "false", "CONNECTION TIMEOUT": "10", "LOB FETCH": "STREAM",
-	} {
-		if query.Get(key) != want {
-			t.Errorf("%s is %q in the DSN, expected %q", key, query.Get(key), want)
-		}
+	if dbConfig.driverName != database.DriverOracle || dbConfig.connector == nil {
+		t.Errorf("expected an oracle connector, got %+v", dbConfig)
 	}
 }
 
-func Test_OracleDSN_defaults(t *testing.T) {
+func Test_OracleDriverConfig(t *testing.T) {
+	driverConfig, err := OracleDriverConfig(oracleDataSource(), 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if driverConfig.ConnectDescriptor != "tcps://db.example.com:1522/FREEPDB1" {
+		t.Errorf("unexpected connect descriptor %q", driverConfig.ConnectDescriptor)
+	}
+	// The password is never parsed out of a string, so it keeps the @ and the /.
+	if driverConfig.Credentials.User != "cdsuser" || driverConfig.Credentials.Password != "p@ss/word" {
+		t.Errorf("unexpected credentials %q / %q", driverConfig.Credentials.User, driverConfig.Credentials.Password)
+	}
+	if driverConfig.ConnectionProperties.ConnectTimeout != 10 {
+		t.Errorf("expected a 10 second connect timeout, got %d", driverConfig.ConnectionProperties.ConnectTimeout)
+	}
+}
+
+func Test_OracleDriverConfig_defaults(t *testing.T) {
 	ds := oracleDataSource()
 	ds.Port = 0
 	ds.SSLMode = ""
 
-	dsn, err := OracleDSN(ds, 5*time.Second)
+	driverConfig, err := OracleDriverConfig(ds, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(dsn, "db.example.com:1521") || !strings.Contains(dsn, "SSL=false") {
-		t.Errorf("unexpected DSN %q", dsn)
+	if driverConfig.ConnectDescriptor != "tcp://db.example.com:1521/FREEPDB1" {
+		t.Errorf("unexpected connect descriptor %q", driverConfig.ConnectDescriptor)
 	}
 }
 
 func Test_oracleTLS(t *testing.T) {
-	cases := map[string][2]string{
-		"": {"false", "false"}, "disable": {"false", "false"}, "require": {"true", "false"},
-		"verify-ca": {"true", "true"}, "VERIFY-FULL": {"true", "true"},
+	type tls struct {
+		protocol        string
+		matchServerName bool
+	}
+	cases := map[string]tls{
+		"": {"tcp", false}, "disable": {"tcp", false}, "require": {"tcps", false},
+		"verify-ca": {"tcps", false}, "VERIFY-FULL": {"tcps", true},
 	}
 	for sslMode, want := range cases {
-		ssl, verify, err := oracleTLS(sslMode)
-		if err != nil || ssl != want[0] || verify != want[1] {
-			t.Errorf("oracleTLS(%q) = %q, %q, %v; expected %v", sslMode, ssl, verify, err, want)
+		protocol, matchServerName, err := oracleTLS(sslMode)
+		if err != nil || protocol != want.protocol || matchServerName != want.matchServerName {
+			t.Errorf("oracleTLS(%q) = %q, %v, %v; expected %+v", sslMode, protocol, matchServerName, err, want)
 		}
 	}
 	if _, _, err := oracleTLS(unsupportedSSLMode); err == nil {

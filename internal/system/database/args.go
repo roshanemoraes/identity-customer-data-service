@@ -21,8 +21,6 @@ package database
 import (
 	"encoding/json"
 	"time"
-
-	goora "github.com/sijms/go-ora/v2"
 )
 
 // NormalizeArgs converts the arguments of a statement to the Go types the driver
@@ -64,10 +62,9 @@ func normalizeServerArgs(args []interface{}) []interface{} {
 	return normalized
 }
 
-// oracleMaxVarcharBytes is the longest text the driver binds as a VARCHAR2. A
-// longer one goes in as a CLOB, such as a long sub_attributes or score_breakdown.
-const oracleMaxVarcharBytes = 32000
-
+// normalizeOracleArgs passes marshaled JSON as text, which a JSON column takes,
+// and a boolean as NUMBER(1). The driver binds text of any length, so a long
+// value needs no LOB type.
 func normalizeOracleArgs(args []interface{}) []interface{} {
 	if len(args) == 0 {
 		return args
@@ -77,11 +74,9 @@ func normalizeOracleArgs(args []interface{}) []interface{} {
 	for i, arg := range args {
 		switch typed := arg.(type) {
 		case []byte:
-			normalized[i] = oracleJSON(typed)
+			normalized[i] = string(typed)
 		case json.RawMessage:
-			normalized[i] = oracleJSON(typed)
-		case string:
-			normalized[i] = oracleText(typed)
+			normalized[i] = string(typed)
 		case time.Time:
 			normalized[i] = typed.UTC()
 		case bool:
@@ -92,21 +87,6 @@ func normalizeOracleArgs(args []interface{}) []interface{} {
 	}
 
 	return normalized
-}
-
-// oracleJSON binds a marshaled JSON document as a BLOB, which a JSON column
-// takes as UTF-8 text. The stores pass these documents as []byte and pass every other
-// value as a string. goora.Blob is the only form the driver writes in full
-// past 32 KB: a plain []byte of that size fails in a MERGE.
-func oracleJSON(document []byte) interface{} {
-	return goora.Blob{Data: document}
-}
-
-func oracleText(text string) interface{} {
-	if len(text) > oracleMaxVarcharBytes {
-		return goora.Clob{String: text, Valid: true}
-	}
-	return text
 }
 
 func oracleBoolean(value bool) int64 {

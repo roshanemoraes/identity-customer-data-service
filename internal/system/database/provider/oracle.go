@@ -20,12 +20,15 @@ package provider
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
 
-	goora "github.com/sijms/go-ora/v2"
+	"github.com/oracle/go-oracledb/v26/oracle"
+	oracleconfig "github.com/oracle/go-oracledb/v26/oracle/config"
 
 	"github.com/wso2/identity-customer-data-service/internal/system/config"
 )
@@ -33,27 +36,32 @@ import (
 // defaultOraclePort
 const defaultOraclePort = 1521
 
-// oracleTLS maps datasource.sslmode to the driver's SSL and SSL VERIFY options.
-func oracleTLS(sslMode string) (ssl, verify string, err error) {
+// oracleTLS maps datasource.sslmode to the connect protocol and to whether the
+// server certificate's name must match the host. Over TCPS the driver always
+// verifies the certificate chain against the system trust store, so require,
+// which asks for encryption without verification, verifies the chain too.
+func oracleTLS(sslMode string) (protocol string, matchServerName bool, err error) {
 	switch strings.ToLower(strings.TrimSpace(sslMode)) {
 	case "", sslModeDisable:
-		return optionFalse, optionFalse, nil
-	case sslModeRequire:
-		// Encrypted, but the certificate is not verified.
-		return optionTrue, optionFalse, nil
-	case sslModeVerifyCA, sslModeVerifyFull:
-		return optionTrue, optionTrue, nil
+		return "tcp", false, nil
+	case sslModeRequire, sslModeVerifyCA:
+		return "tcps", false, nil
+	case sslModeVerifyFull:
+		return "tcps", true, nil
 	default:
-		return "", "", fmt.Errorf("datasource.sslmode %q is not supported for oracle: use disable, require, "+
+		return "", false, fmt.Errorf("datasource.sslmode %q is not supported for oracle: use disable, require, "+
 			"verify-ca or verify-full", sslMode)
 	}
 }
 
-// OracleDSN builds the connection string of the Oracle datasource.
-func OracleDSN(ds config.DataSourceConfig, connectTimeout time.Duration) (string, error) {
-	ssl, verify, err := oracleTLS(ds.SSLMode)
+// OracleDriverConfig builds the driver configuration of the Oracle datasource.
+// The credentials go in the configuration rather than in a connection string,
+// so a password may hold any character.
+func OracleDriverConfig(ds config.DataSourceConfig, connectTimeout time.Duration) (
+	*oracleconfig.OracleDriverConfig, error) {
+	protocol, matchServerName, err := oracleTLS(ds.SSLMode)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	port := ds.Port
@@ -61,16 +69,32 @@ func OracleDSN(ds config.DataSourceConfig, connectTimeout time.Duration) (string
 		port = defaultOraclePort
 	}
 
-	// LOB FETCH=STREAM reads a CLOB or BLOB in full. The driver's default, INLINE,
-	// cuts every LOB off at 32 KB without an error.
-	options := map[string]string{
-		"SSL":                ssl,
-		"SSL VERIFY":         verify,
-		"CONNECTION TIMEOUT": strconv.Itoa(int(connectTimeout.Seconds())),
-		"LOB FETCH":          "STREAM",
-	}
+	driverConfig := oracle.NewOracleDriverConfig()
+	driverConfig.ConnectDescriptor = fmt.Sprintf("%s://%s/%s", protocol,
+		net.JoinHostPort(ds.Hostname, strconv.Itoa(port)), ds.Name)
+	driverConfig.Credentials.User = ds.Username
+	driverConfig.Credentials.Password = ds.Password
+	driverConfig.ConnectionProperties.ConnectTimeout = int(connectTimeout.Seconds())
+	driverConfig.ConnectionProperties.SSLServerDNMatch = matchServerName
+	return driverConfig, nil
+}
 
-	return goora.BuildUrl(ds.Hostname, port, ds.Name, ds.Username, ds.Password, options), nil
+// OracleConnector builds the connector the Oracle pool opens connections with.
+func OracleConnector(ds config.DataSourceConfig, connectTimeout time.Duration) (driver.Connector, error) {
+	driverConfig, err := OracleDriverConfig(ds, connectTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return oracle.NewOracleConnector(driverConfig)
+}
+
+// OpenOracle opens a pool on the Oracle datasource.
+func OpenOracle(ds config.DataSourceConfig, connectTimeout time.Duration) (*sql.DB, error) {
+	connector, err := OracleConnector(ds, connectTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return sql.OpenDB(connector), nil
 }
 
 // getOracleDB opens the Oracle pool once and returns it on every later call.

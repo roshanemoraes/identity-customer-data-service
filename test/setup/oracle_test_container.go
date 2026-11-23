@@ -149,7 +149,7 @@ func SetupTestOracle(ctx context.Context) (*TestOracle, error) {
 // open returns a pool on the pluggable database as a user, built from the
 // settings the production provider uses.
 func (o *TestOracle) open(username, password string) (*sql.DB, error) {
-	dsn, err := provider.OracleDSN(config.DataSourceConfig{
+	return provider.OpenOracle(config.DataSourceConfig{
 		Type:     database.TypeOracle,
 		Hostname: o.Host,
 		Port:     o.Port,
@@ -157,10 +157,6 @@ func (o *TestOracle) open(username, password string) (*sql.DB, error) {
 		Username: username,
 		Password: password,
 	}, 30*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	return sql.Open(database.DriverOracle, dsn)
 }
 
 // createUser creates the user the schema is applied as, retrying while the

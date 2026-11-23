@@ -133,9 +133,15 @@ func getMySQLDB() (*sql.DB, error) {
 // answers within the connect timeout. The caller publishes the handle only on
 // success, so a pool no caller can reach is not cached.
 func openServerPool(dbConfig DBConfig, settings serverPoolSettings) (*sql.DB, error) {
-	db, err := sql.Open(dbConfig.driverName, dbConfig.dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read the datasource settings: %w", err)
+	var db *sql.DB
+	if dbConfig.connector != nil {
+		db = sql.OpenDB(dbConfig.connector)
+	} else {
+		var err error
+		db, err = sql.Open(dbConfig.driverName, dbConfig.dsn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read the datasource settings: %w", err)
+		}
 	}
 	applyPoolSettings(db, settings)
 

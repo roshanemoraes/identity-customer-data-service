@@ -25,8 +25,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	goora "github.com/sijms/go-ora/v2"
 )
 
 func Test_Rebind_LeavesNumberedDatasourcesUnchanged(t *testing.T) {
@@ -435,20 +433,16 @@ func Test_Rebind_Oracle(t *testing.T) {
 
 func Test_NormalizeArgs_Oracle(t *testing.T) {
 	moment := time.Date(2026, 5, 1, 10, 0, 0, 0, time.FixedZone("x", 3600))
-	long := strings.Repeat("a", oracleMaxVarcharBytes+1)
+	long := strings.Repeat("a", 40000)
 
 	got := NormalizeArgs(TypeOracle, []interface{}{
 		[]byte(`{"a":1}`), json.RawMessage(`[]`), moment, true, false, 7, nil, "text", long,
 	})
 
-	// Marshaled JSON goes in as a BLOB, which a JSON column takes as UTF-8 text.
-	expected := []interface{}{goora.Blob{Data: []byte(`{"a":1}`)}, goora.Blob{Data: []byte(`[]`)},
-		moment.UTC(), int64(1), int64(0), 7, nil, "text"}
-	if !reflect.DeepEqual(got[:len(expected)], expected) {
-		t.Errorf("expected %#v, got %#v", expected, got[:len(expected)])
-	}
-	if _, isText := got[len(expected)].(string); isText {
-		t.Error("text too long for a VARCHAR2 must be bound as a CLOB")
+	// Marshaled JSON goes in as text, and text of any length stays a string.
+	expected := []interface{}{`{"a":1}`, `[]`, moment.UTC(), int64(1), int64(0), 7, nil, "text", long}
+	if !reflect.DeepEqual(got, expected) {
+		t.Errorf("expected %#v, got %#v", expected, got)
 	}
 }
 

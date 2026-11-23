@@ -75,7 +75,7 @@ const (
 	DriverSQLite   = "sqlite"
 	DriverMySQL    = "mysql"
 	DriverMSSQL    = "sqlserver"
-	DriverOracle   = "oracle"
+	DriverOracle   = "oracledb"
 )
 
 // SQLite defaults, applied when the corresponding configuration values are

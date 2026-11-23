@@ -23,6 +23,7 @@ package provider
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -41,6 +42,8 @@ import (
 type DBConfig struct {
 	dsn        string
 	driverName string
+	// connector, when set, opens the connections in place of driverName and dsn.
+	connector driver.Connector
 }
 
 var (
@@ -527,11 +530,11 @@ func getDBConfig(dataSource config.Config) (DBConfig, error) {
 		if err != nil {
 			return DBConfig{}, err
 		}
-		dsn, err := OracleDSN(ds, settings.connectTimeout)
+		connector, err := OracleConnector(ds, settings.connectTimeout)
 		if err != nil {
 			return DBConfig{}, err
 		}
-		return DBConfig{driverName: database.DriverOracle, dsn: dsn}, nil
+		return DBConfig{driverName: database.DriverOracle, connector: connector}, nil
 
 	default:
 		return DBConfig{}, fmt.Errorf("unsupported datasource type %q", ds.Type)
