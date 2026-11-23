@@ -20,11 +20,13 @@ package database
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func Test_Rebind_LeavesNumberedDatasourcesUnchanged(t *testing.T) {
@@ -465,5 +467,40 @@ func Test_ReturnsRows(t *testing.T) {
 		if got := ReturnsRows(c.dbType, c.sqlText); got != c.want {
 			t.Errorf("ReturnsRows(%q, %q) = %v, expected %v", c.dbType, c.sqlText, got, c.want)
 		}
+	}
+}
+
+func Test_Rebind_OracleSplitsLongText(t *testing.T) {
+	// Sinhala letters take three bytes and the emoji four, so a piece boundary
+	// falls inside a character unless the split respects them.
+	long := strings.Repeat("කොළඹ 😀 ", 1200)
+
+	text, args, err := Rebind(TypeOracle, `UPDATE t SET doc = $1, name = $2 WHERE id = $3`,
+		[]interface{}{[]byte(long), "short", 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pieces := args[:len(args)-2]
+	if len(pieces) < 2 {
+		t.Fatalf("expected the long value in pieces, got %d argument(s)", len(pieces))
+	}
+	var joined strings.Builder
+	for i, piece := range pieces {
+		text, ok := piece.(string)
+		if !ok || len(text) > oracleMaxBindBytes || !utf8.ValidString(text) {
+			t.Fatalf("piece %d is not whole text within the bind limit: %d bytes", i, len(text))
+		}
+		joined.WriteString(text)
+	}
+	if joined.String() != long {
+		t.Error("the pieces do not join back into the value")
+	}
+	if !strings.HasPrefix(text, "UPDATE t SET doc = (TO_CLOB(:1) || TO_CLOB(:2)") ||
+		!strings.HasSuffix(text, fmt.Sprintf("name = :%d WHERE id = :%d", len(pieces)+1, len(pieces)+2)) {
+		t.Errorf("unexpected statement %q", text)
+	}
+	if args[len(args)-2] != "short" || args[len(args)-1] != 7 {
+		t.Errorf("the other arguments moved: %#v", args[len(args)-2:])
 	}
 }

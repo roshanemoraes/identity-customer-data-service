@@ -63,8 +63,8 @@ func normalizeServerArgs(args []interface{}) []interface{} {
 }
 
 // normalizeOracleArgs passes marshaled JSON as text, which a JSON column takes,
-// and a boolean as NUMBER(1). The driver binds text of any length, so a long
-// value needs no LOB type.
+// and a boolean as NUMBER(1). Text too long for one VARCHAR2 bind has already
+// been split into pieces by rebindOrdinal.
 func normalizeOracleArgs(args []interface{}) []interface{} {
 	if len(args) == 0 {
 		return args

@@ -19,9 +19,11 @@
 package database
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // BindStatement prepares a statement and its arguments for dbType: it rewrites
@@ -71,10 +73,25 @@ func rebindPositional(sqlText string, args []interface{}) (string, []interface{}
 func rebindOrdinal(sqlText string, args []interface{}) (string, []interface{}, error) {
 	sqlText = strings.TrimRight(sqlText, "; \t\r\n")
 
-	position := 0
-	text, order, err := rewritePlaceholders(sqlText, func(int) string {
-		position++
-		return ":" + strconv.Itoa(position)
+	var ordered []interface{}
+	text, order, err := rewritePlaceholders(sqlText, func(number int) string {
+		var arg interface{}
+		if number >= 1 && number <= len(args) {
+			arg = args[number-1]
+		}
+		pieces, long := oracleTextPieces(arg)
+		if !long {
+			ordered = append(ordered, arg)
+			return ":" + strconv.Itoa(len(ordered))
+		}
+		// A value too long for a VARCHAR2 bind is joined back into a CLOB from
+		// pieces that each fit one.
+		parts := make([]string, len(pieces))
+		for i, piece := range pieces {
+			ordered = append(ordered, piece)
+			parts[i] = "TO_CLOB(:" + strconv.Itoa(len(ordered)) + ")"
+		}
+		return "(" + strings.Join(parts, " || ") + ")"
 	})
 	if err != nil {
 		return "", nil, err
@@ -83,12 +100,41 @@ func rebindOrdinal(sqlText string, args []interface{}) (string, []interface{}, e
 		return "", nil, err
 	}
 
-	ordered := make([]interface{}, len(order))
-	for i, number := range order {
-		ordered[i] = args[number-1]
+	return text, ordered, nil
+}
+
+// oracleMaxBindBytes is the longest text Oracle takes as a VARCHAR2 bind in SQL.
+const oracleMaxBindBytes = 4000
+
+// oracleTextPieces splits text longer than oracleMaxBindBytes into pieces of
+// at most that many bytes, each ending on a whole character. It reports false
+// for a value that is not text or fits one bind.
+func oracleTextPieces(arg interface{}) ([]string, bool) {
+	var text string
+	switch typed := arg.(type) {
+	case string:
+		text = typed
+	case []byte:
+		text = string(typed)
+	case json.RawMessage:
+		text = string(typed)
+	default:
+		return nil, false
+	}
+	if len(text) <= oracleMaxBindBytes {
+		return nil, false
 	}
 
-	return text, ordered, nil
+	var pieces []string
+	for len(text) > oracleMaxBindBytes {
+		end := oracleMaxBindBytes
+		for end > 0 && !utf8.RuneStart(text[end]) {
+			end--
+		}
+		pieces = append(pieces, text[:end])
+		text = text[end:]
+	}
+	return append(pieces, text), true
 }
 
 func rebindNamed(sqlText string, args []interface{}) (string, []interface{}, error) {
