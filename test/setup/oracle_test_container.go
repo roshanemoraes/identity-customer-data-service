@@ -186,6 +186,9 @@ func (o *TestOracle) createUser(ctx context.Context) error {
 // oracleBlockEnd matches the line that ends a block in a SQL*Plus script.
 var oracleBlockEnd = regexp.MustCompile(`(?m)^/\s*$`)
 
+// oracleLeadingComments matches the comment lines and blank lines that open a block.
+var oracleLeadingComments = regexp.MustCompile(`\A(?:\s*--[^\n]*\n|\s*\n)*`)
+
 // ApplySchemaFile runs a schema script block by block. A block ends at a line
 // holding only a slash, as in SQL*Plus.
 func (o *TestOracle) ApplySchemaFile(path string) error {
@@ -194,7 +197,10 @@ func (o *TestOracle) ApplySchemaFile(path string) error {
 		return fmt.Errorf("failed to read the schema file: %w", err)
 	}
 	for _, block := range oracleBlockEnd.Split(string(script), -1) {
-		if strings.TrimSpace(block) == "" {
+		// The driver reads a statement's kind from its first word, so the
+		// comments above a block are dropped before it is sent.
+		block = strings.TrimSpace(oracleLeadingComments.ReplaceAllString(block, ""))
+		if block == "" {
 			continue
 		}
 		if _, err := o.DB.Exec(block); err != nil {
