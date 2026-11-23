@@ -136,7 +136,7 @@ func SetupTestOracle(ctx context.Context) (*TestOracle, error) {
 	}
 	instance.DB = db
 
-	if err := waitForStatement(ctx, db, oracleProbe); err != nil {
+	if err := waitForOracleQuery(ctx, db); err != nil {
 		_ = container.Terminate(ctx)
 		return nil, err
 	}
@@ -169,7 +169,7 @@ func (o *TestOracle) createUser(ctx context.Context) error {
 	}
 	defer func() { _ = admin.Close() }()
 
-	if err := waitForStatement(ctx, admin, oracleProbe); err != nil {
+	if err := waitForOracleQuery(ctx, admin); err != nil {
 		return err
 	}
 	for _, statement := range []string{
@@ -202,4 +202,27 @@ func (o *TestOracle) ApplySchemaFile(path string) error {
 		}
 	}
 	return nil
+}
+
+// waitForOracleQuery runs the readiness probe until it answers. The driver
+// runs a SELECT only as a query, so the probe cannot go through Exec.
+func waitForOracleQuery(ctx context.Context, db *sql.DB) error {
+	deadline, cancel := context.WithTimeout(ctx, postgresReadyTimeout)
+	defer cancel()
+
+	var lastErr error
+	for {
+		var answer int
+		lastErr = db.QueryRowContext(deadline, oracleProbe).Scan(&answer)
+		if lastErr == nil {
+			return nil
+		}
+
+		select {
+		case <-deadline.Done():
+			return fmt.Errorf("the test database did not answer a query within %s: %w",
+				postgresReadyTimeout, lastErr)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
