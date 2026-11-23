@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	goora "github.com/sijms/go-ora/v2"
+	goora "github.com/sijms/go-ora/v3"
 
 	"github.com/wso2/identity-customer-data-service/internal/system/config"
 )

@@ -92,7 +92,7 @@ func SetupTestOracle(ctx context.Context) (*TestOracle, error) {
 			"ORACLE_PWD":      oracleSystemSecret,
 		},
 		WaitingFor: wait.ForAll(
-			wait.ForLog("DATABASE IS READY TO USE!"),
+			wait.ForLog("DATABASE IS READY TO USE!").WithStartupTimeout(oracleReadyTimeout),
 			wait.ForListeningPort("1521/tcp"),
 		).WithDeadline(oracleReadyTimeout),
 	}

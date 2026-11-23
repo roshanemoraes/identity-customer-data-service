@@ -22,7 +22,7 @@ import (
 	"encoding/json"
 	"time"
 
-	goora "github.com/sijms/go-ora/v2"
+	oratypes "github.com/sijms/go-ora/v3/types"
 )
 
 // NormalizeArgs converts the arguments of a statement to the Go types the driver
@@ -96,15 +96,21 @@ func normalizeOracleArgs(args []interface{}) []interface{} {
 
 // oracleJSON binds a marshaled JSON document as a BLOB, which a JSON column
 // takes as UTF-8 text. The stores pass these documents as []byte and pass every other
-// value as a string. goora.Blob is the only form the driver writes in full
+// value as a string. A Blob is the only form the driver writes in full
 // past 32 KB: a plain []byte of that size fails in a MERGE.
 func oracleJSON(document []byte) interface{} {
-	return goora.Blob{Data: document}
+	var blob oratypes.Blob
+	// With no connection yet, SetValue only keeps the bytes; the driver uploads
+	// them when it binds the value. It fails only for a type other than []byte.
+	_ = blob.SetValue(document)
+	return blob
 }
 
 func oracleText(text string) interface{} {
 	if len(text) > oracleMaxVarcharBytes {
-		return goora.Clob{String: text, Valid: true}
+		var clob oratypes.Clob
+		_ = clob.SetValue(text)
+		return clob
 	}
 	return text
 }

@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	goora "github.com/sijms/go-ora/v2"
+	oratypes "github.com/sijms/go-ora/v3/types"
 )
 
 func Test_Rebind_LeavesNumberedDatasourcesUnchanged(t *testing.T) {
@@ -441,13 +441,18 @@ func Test_NormalizeArgs_Oracle(t *testing.T) {
 		[]byte(`{"a":1}`), json.RawMessage(`[]`), moment, true, false, 7, nil, "text", long,
 	})
 
+	blob := func(document string) oratypes.Blob {
+		var value oratypes.Blob
+		_ = value.SetValue([]byte(document))
+		return value
+	}
 	// Marshaled JSON goes in as a BLOB, which a JSON column takes as UTF-8 text.
-	expected := []interface{}{goora.Blob{Data: []byte(`{"a":1}`)}, goora.Blob{Data: []byte(`[]`)},
+	expected := []interface{}{blob(`{"a":1}`), blob(`[]`),
 		moment.UTC(), int64(1), int64(0), 7, nil, "text"}
 	if !reflect.DeepEqual(got[:len(expected)], expected) {
 		t.Errorf("expected %#v, got %#v", expected, got[:len(expected)])
 	}
-	if _, isText := got[len(expected)].(string); isText {
+	if _, isClob := got[len(expected)].(oratypes.Clob); !isClob {
 		t.Error("text too long for a VARCHAR2 must be bound as a CLOB")
 	}
 }
