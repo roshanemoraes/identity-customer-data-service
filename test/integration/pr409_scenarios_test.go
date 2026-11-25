@@ -770,7 +770,21 @@ func Test_PR409_S1b_ConcurrentEvaluations(t *testing.T) {
 		}
 		close(start)
 		wg.Wait()
-		time.Sleep(3 * time.Second) // let anything they queued run
+		// Wait up to 20 s for the profiles to settle under one master, since a stale merge
+		// queues its profiles again and they finish through the queue.
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			settled := map[string]bool{}
+			for _, id := range ids {
+				m, _ := pr409MasterOf(t, ref.ID, id)
+				settled[m] = true
+			}
+			if len(settled) == 1 {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		time.Sleep(1 * time.Second) // let re-queued jobs settle
 		masters := map[string]bool{}
 		var roundProblems []string
 		for _, id := range ids {
@@ -815,4 +829,8 @@ func Test_PR409_S1b_ConcurrentEvaluations(t *testing.T) {
 		}
 	}
 	pr409Reportf(t, "%d/%d rounds ended as one master with all data; problems seen: %v", ok, rounds, problems)
+	if ok < rounds {
+		t.Errorf("S1b: %d of %d rounds of simultaneous evaluations did not end as one master holding every "+
+			"profile's data, 20 s after they ran: %v", rounds-ok, rounds, problems)
+	}
 }
