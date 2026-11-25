@@ -22,6 +22,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wso2/identity-customer-data-service/test/setup"
 
@@ -30,6 +31,7 @@ import (
 	profileModel "github.com/wso2/identity-customer-data-service/internal/profile/model"
 	"github.com/wso2/identity-customer-data-service/internal/system/config"
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
+	"github.com/wso2/identity-customer-data-service/internal/system/database"
 	urService "github.com/wso2/identity-customer-data-service/internal/unification_rules/service"
 )
 
@@ -79,7 +81,7 @@ func Test_PairEvaluatedByTwoWorkers_RaisesOneReviewTask(t *testing.T) {
 				defer wg.Done()
 				<-start
 				job := profileModel.Profile{ProfileID: id, OrgID: ref.ID}
-				if err := irWorker.ResolveProfileAsync(ctx, ref.ID, job); err != nil {
+				if err := resolveAsTheWorkerDoes(ctx, ref.ID, job); err != nil {
 					t.Errorf("resolve profile: %v", err)
 				}
 			}()
@@ -105,5 +107,18 @@ func Test_PairEvaluatedByTwoWorkers_RaisesOneReviewTask(t *testing.T) {
 		if perPair[p] != 1 {
 			t.Errorf("pair %d (%s) has %d pending review tasks, want 1", i, names[i], perPair[p])
 		}
+	}
+}
+
+// resolveAsTheWorkerDoes runs identity resolution for a profile and, as a unification worker does, runs it
+// again while it fails on a transient database error. Concurrent writes to the blocking index can
+// deadlock on SQL Server, which picks one of them to fail.
+func resolveAsTheWorkerDoes(ctx context.Context, orgID string, profile profileModel.Profile) error {
+	for attempt := 0; ; attempt++ {
+		err := irWorker.ResolveProfileAsync(ctx, orgID, profile)
+		if !database.IsTransient(err) || attempt == 5 {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
 	}
 }

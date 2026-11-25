@@ -118,10 +118,24 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 		parentID = freshProfile.ProfileStatus.ReferenceProfileID
 	}
 
+	// The engine logs a lookup that fails and goes on without its candidates. A transient failure is
+	// kept, so the evaluation runs again rather than miss a match.
+	var transientErr error
+	keepTransient := func(err error) {
+		if transientErr == nil && database.IsTransient(err) {
+			transientErr = err
+		}
+	}
+
 	candidateIDs := engine.FindCandidatesByIndex(blockingKeys, orgID, excludeID,
 		func(keyOrgId, attr string, values []string, exclude string, max int) ([]string, error) {
-			return irStore.FindCandidateIDsByKeys(ctx, keyOrgId, attr, values, exclude, max)
+			ids, err := irStore.FindCandidateIDsByKeys(ctx, keyOrgId, attr, values, exclude, max)
+			keepTransient(err)
+			return ids, err
 		})
+	if transientErr != nil {
+		return fmt.Errorf("find the candidates of '%s': %w", freshProfile.ProfileID, transientErr)
+	}
 
 	if parentID != "" {
 		filtered := make([]string, 0, len(candidateIDs))
@@ -201,7 +215,9 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 		OrgID:      orgID,
 		Thresholds: thresholds,
 		ValueFrequency: func(keyOrgId, attr, keyValue string) (int, error) {
-			return irStore.CountProfilesByBlockingKey(ctx, keyOrgId, attr, keyValue)
+			count, err := irStore.CountProfilesByBlockingKey(ctx, keyOrgId, attr, keyValue)
+			keepTransient(err)
+			return count, err
 		},
 	}
 
@@ -226,6 +242,10 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 		}
 	}
 
+	if transientErr != nil {
+		// A value scored without its frequency can be taken for a rare one.
+		return fmt.Errorf("score the candidates of '%s': %w", freshProfile.ProfileID, transientErr)
+	}
 	if len(scored) == 0 {
 		return nil
 	}
