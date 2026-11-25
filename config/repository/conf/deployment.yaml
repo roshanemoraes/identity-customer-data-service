@@ -279,5 +279,6 @@ identity_resolution:
 
   # How many queued profiles this instance unifies at the same time. Matching runs in
   # parallel, and two merges that share a profile wait for each other. Each worker holds
-  # at most one database connection at a time. 5 when the key is absent.
-  unification_workers: 5
+  # at most one database connection at a time. When the key is absent, 5, or 1 on the
+  # inbuilt SQLite database, which takes one writer at a time.
+  # unification_workers: 5

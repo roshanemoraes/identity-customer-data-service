@@ -858,6 +858,12 @@ var IRUpdateReviewTaskStatus = newQuery("CDS-IDR-18",
 				     resolution_notes = $3
 				 WHERE id = $4`)
 
+// IRLockReviewTask locks a review task until the transaction ends, and returns its status.
+var IRLockReviewTask = newQuery("CDS-IDR-25",
+	`SELECT status FROM review_tasks WHERE id = $1 FOR UPDATE`,
+	// SQLite locks the whole database when the transaction begins.
+	`SELECT status FROM review_tasks WHERE id = $1`)
+
 // IRInsertRejectionPair records a rejected profile pair, replacing the evidence of an existing rejection.
 var IRInsertRejectionPair = newQuery("CDS-IDR-19",
 	`INSERT INTO rejection_pairs (id, org_id, profile_id_1, profile_id_2, match_score,

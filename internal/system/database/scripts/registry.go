@@ -160,5 +160,6 @@ func AllQueries() map[string]model.DBQuery {
 		"IRRepointRejectionPairs":            IRRepointRejectionPairs,
 		"IRUpdateMirrorReviewTask":           IRUpdateMirrorReviewTask,
 		"IRUpdateReviewTaskStatus":           IRUpdateReviewTaskStatus,
+		"IRLockReviewTask":                   IRLockReviewTask,
 	}
 }

@@ -44,6 +44,11 @@ func (e *ServerError) Error() string {
 	return fmt.Sprintf("[%s] %s: %v", e.Code, e.Message, e.Err)
 }
 
+// Unwrap returns the cause, so that errors.Is and errors.As see the database or service error under it.
+func (e *ServerError) Unwrap() error {
+	return e.Err
+}
+
 func (e *ClientError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }

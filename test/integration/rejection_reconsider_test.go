@@ -91,10 +91,14 @@ func Test_RejectedPair_ReconsideredIsReviewedNotMerged(t *testing.T) {
 	// raised for review rather than merged.
 	first := insertBareProfile(t, org, "", map[string]interface{}{
 		"name": "Marcus Delacroix", "email": "marcus.d@cdsfuzz.io"})
-	irWorker.ResolveProfileAsync(ctx, ref.ID, first)
+	if err := irWorker.ResolveProfileAsync(ctx, ref.ID, first); err != nil {
+		t.Fatalf("resolve profile: %v", err)
+	}
 	second := insertBareProfile(t, org, "", map[string]interface{}{
 		"name": "Marcus Delacroix", "email": "mdelacroix@othermail.io"})
-	irWorker.ResolveProfileAsync(ctx, ref.ID, second)
+	if err := irWorker.ResolveProfileAsync(ctx, ref.ID, second); err != nil {
+		t.Fatalf("resolve profile: %v", err)
+	}
 
 	pending, _, err := irStore.GetPendingReviewTasks(ctx, ref.ID, 10)
 	if err != nil {
@@ -124,7 +128,9 @@ func Test_RejectedPair_ReconsideredIsReviewedNotMerged(t *testing.T) {
 	}
 
 	// Evaluating the pair again on the same evidence leaves the rejection standing.
-	irWorker.ResolveProfileAsync(ctx, ref.ID, second)
+	if err := irWorker.ResolveProfileAsync(ctx, ref.ID, second); err != nil {
+		t.Fatalf("resolve profile: %v", err)
+	}
 	if stillRejected, _, err := irStore.GetPendingReviewTasks(ctx, ref.ID, 10); err != nil {
 		t.Fatalf("list tasks: %v", err)
 	} else if len(stillRejected) != 0 {
@@ -137,7 +143,9 @@ func Test_RejectedPair_ReconsideredIsReviewedNotMerged(t *testing.T) {
 	if err := profileStore.UpdateProfile(ctx, ref.ID, second); err != nil {
 		t.Fatalf("update profile: %v", err)
 	}
-	irWorker.ResolveProfileAsync(ctx, ref.ID, second)
+	if err := irWorker.ResolveProfileAsync(ctx, ref.ID, second); err != nil {
+		t.Fatalf("resolve profile: %v", err)
+	}
 
 	for _, p := range []string{first.ProfileID, second.ProfileID} {
 		stored, err := profileStore.GetProfile(ctx, p, ref.ID)

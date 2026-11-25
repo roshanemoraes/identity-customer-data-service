@@ -283,7 +283,7 @@ Both paths honour `identity_resolution.fuzzy_matching_enabled`. With it off a ru
 
 ## Workers and concurrent merges
 
-Each instance unifies up to `identity_resolution.unification_workers` profiles at the same time (5 when the key is absent). With several instances on a shared broker, every worker on every instance takes jobs from the same queue.
+Each instance unifies up to `identity_resolution.unification_workers` profiles at the same time. When the key is absent, that is 5, or 1 on the inbuilt SQLite database: SQLite takes one writer at a time, so further workers would only wait for each other. With several instances on a shared broker, every worker on every instance takes jobs from the same queue.
 
 Matching runs without locks: reading the profile, finding and scoring candidates, and deciding are reads, and they are the bulk of the work. Only the merge is protected:
 

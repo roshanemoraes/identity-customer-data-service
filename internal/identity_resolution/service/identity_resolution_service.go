@@ -105,11 +105,6 @@ func (s *IdentityResolutionService) ResolveReviewTask(ctx context.Context, orgID
 	approved bool, resolvedBy string, notes string) error {
 	logger := log.GetLogger()
 
-	status := constants.ReviewStatusRejected
-	if approved {
-		status = constants.ReviewStatusApproved
-	}
-
 	task, err := irStore.GetReviewTaskByID(ctx, taskID)
 	if err != nil {
 		return err
@@ -135,26 +130,11 @@ func (s *IdentityResolutionService) ResolveReviewTask(ctx context.Context, orgID
 	}
 
 	if task.Status != constants.ReviewStatusPending {
-		return errors2.NewClientError(errors2.ErrorMessage{
-			Code:        errors2.IRReviewTaskResolved.Code,
-			Message:     errors2.IRReviewTaskResolved.Message,
-			Description: fmt.Sprintf("Review task %s has already been %s", taskID, task.Status),
-		}, http.StatusConflict)
+		return reviewTaskResolvedError(taskID, task.Status)
 	}
 
 	if !approved {
-		// Store the rejection pair before marking the task rejected.
-		// Keep the evidence the administrator decided against, so a later, materially
-		// stronger match can be reconsidered while ordinary edits leave the decision alone.
-		if err := irStore.InsertRejectionPair(ctx, orgID, task.IncomingProfileID,
-			task.CandidateProfileID, resolvedBy, task.MatchScore, task.ScoreBreakdown); err != nil {
-			logger.Error(fmt.Sprintf("Service: failed to store rejection pair for task %s", taskID), log.Error(err))
-			return err
-		}
-		if err := irStore.UpdateReviewTaskStatus(ctx, taskID, status, resolvedBy, notes); err != nil {
-			return err
-		}
-		return nil
+		return rejectReviewTask(ctx, orgID, task, resolvedBy, notes)
 	}
 
 	incomingProfile, err := profileStore.GetProfile(ctx, task.IncomingProfileID, orgID)
@@ -227,11 +207,17 @@ func (s *IdentityResolutionService) ResolveReviewTask(ctx context.Context, orgID
 		}
 	}
 
-	// The merge cancels the other pending tasks of both profiles and queues their profiles to be
-	// evaluated again. This task stays pending until the merge is done, so a failed merge leaves
-	// it pending for the caller to retry.
-	survivingMaster, mergeErr := workers.MergeReviewedProfiles(ctx, orgID, taskID, *candidate, *incomingProfile,
-		mergeReason)
+	// The merge marks the task approved in its transaction, cancels the other pending tasks of both
+	// profiles, and queues their profiles to be evaluated again. A failed merge leaves the task pending
+	// for the caller to retry.
+	survivingMaster, mergeErr := workers.MergeReviewedProfiles(ctx, orgID,
+		workers.ReviewApproval{TaskID: taskID, ResolvedBy: resolvedBy, Notes: notes},
+		*candidate, *incomingProfile, mergeReason)
+	var notPending *irStore.ReviewTaskNotPendingError
+	if errors.As(mergeErr, &notPending) {
+		// Another administrator resolved the task first.
+		return reviewTaskResolvedError(taskID, notPending.Status)
+	}
 	if errors.Is(mergeErr, workers.ErrMergeStale) {
 		// A unification job merged one of the two between reading them above and the merge.
 		return withdrawReviewTask(ctx, orgID, task)
@@ -254,14 +240,63 @@ func (s *IdentityResolutionService) ResolveReviewTask(ctx context.Context, orgID
 		}, http.StatusConflict)
 	}
 
-	// Merge succeeded — commit task status.
-	if err := irStore.UpdateReviewTaskStatus(ctx, taskID, status, resolvedBy, notes); err != nil {
-		logger.Error(fmt.Sprintf("Service: merge succeeded but failed to update task %s status to %s",
-			taskID, status), log.Error(err))
+	return nil
+}
+
+// rejectReviewTask records that the two profiles of a review task are different people, and marks the
+// task rejected.
+//
+// The profile references are locked, then the task, in the order a merge takes them, so a merge of
+// either profile and an approval of the task wait for the rejection or run before it. A task one of
+// whose profiles was merged since it was raised is withdrawn rather than rejected: a rejection of the
+// merged profile would never be read again, and the master holds data the administrator did not see.
+func rejectReviewTask(ctx context.Context, orgID string, task *model.ReviewTask, resolvedBy, notes string) error {
+	logger := log.GetLogger()
+
+	err := profileStore.RunInTransaction(ctx, func(txCtx context.Context) error {
+		if err := profileStore.LockReferenceProfiles(txCtx, orgID, task.IncomingProfileID,
+			task.CandidateProfileID); err != nil {
+			return err
+		}
+		if err := irStore.LockPendingReviewTask(txCtx, task.ID); err != nil {
+			return err
+		}
+		// Keep the evidence the administrator decided against, so a later, materially
+		// stronger match can be reconsidered while ordinary edits leave the decision alone.
+		if err := irStore.InsertRejectionPair(txCtx, orgID, task.IncomingProfileID,
+			task.CandidateProfileID, resolvedBy, task.MatchScore, task.ScoreBreakdown); err != nil {
+			logger.Error(fmt.Sprintf("Service: failed to store rejection pair for task %s", task.ID),
+				log.Error(err))
+			return err
+		}
+		return irStore.UpdateReviewTaskStatus(txCtx, task.ID, constants.ReviewStatusRejected, resolvedBy, notes)
+	})
+	var notPending *irStore.ReviewTaskNotPendingError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &notPending):
+		return reviewTaskResolvedError(task.ID, notPending.Status)
+	case errors.Is(err, profileStore.ErrProfileMerged):
+		return withdrawReviewTask(ctx, orgID, task)
+	case errors.Is(err, profileStore.ErrProfileReferenceNotFound):
+		return errors2.NewClientError(errors2.ErrorMessage{
+			Code:        errors2.ProfileNotFound.Code,
+			Message:     errors2.ProfileNotFound.Message,
+			Description: fmt.Sprintf("A profile of review task %s no longer exists", task.ID),
+		}, http.StatusNotFound)
+	default:
 		return err
 	}
+}
 
-	return nil
+// reviewTaskResolvedError is the 409 for resolving a review task that is no longer pending.
+func reviewTaskResolvedError(taskID, status string) error {
+	return errors2.NewClientError(errors2.ErrorMessage{
+		Code:        errors2.IRReviewTaskResolved.Code,
+		Message:     errors2.IRReviewTaskResolved.Message,
+		Description: fmt.Sprintf("Review task %s has already been %s", taskID, status),
+	}, http.StatusConflict)
 }
 
 // isMergedProfile reports whether a profile has been merged into another profile, which is its master.
@@ -276,9 +311,20 @@ func isMergedProfile(p *profileModel.Profile) bool {
 // did not see, and the evidence may no longer hold. Both profiles are queued to be evaluated again,
 // each as the master it belongs to, which merges them, raises a new task, or leaves them apart.
 func withdrawReviewTask(ctx context.Context, orgID string, task *model.ReviewTask) error {
-	if err := irStore.UpdateReviewTaskStatus(ctx, task.ID, constants.ReviewStatusCancelled,
-		constants.CanceledBySystem, "Withdrawn: a profile of the pair was merged with another profile "+
-			"after the task was raised"); err != nil {
+	err := profileStore.RunInTransaction(ctx, func(txCtx context.Context) error {
+		if err := irStore.LockPendingReviewTask(txCtx, task.ID); err != nil {
+			return err
+		}
+		return irStore.UpdateReviewTaskStatus(txCtx, task.ID, constants.ReviewStatusCancelled,
+			constants.CanceledBySystem, "Withdrawn: a profile of the pair was merged with another profile "+
+				"after the task was raised")
+	})
+	var notPending *irStore.ReviewTaskNotPendingError
+	if errors.As(err, &notPending) {
+		// The merge that made the task out of date cancelled it, or another administrator resolved it.
+		return reviewTaskResolvedError(task.ID, notPending.Status)
+	}
+	if err != nil {
 		return err
 	}
 	workers.RequeueAsMasters(ctx, orgID, task.IncomingProfileID, task.CandidateProfileID)

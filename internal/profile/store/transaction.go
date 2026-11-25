@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/wso2/identity-customer-data-service/internal/system/constants"
 	dbModel "github.com/wso2/identity-customer-data-service/internal/system/database/model"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/provider"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/scripts"
@@ -71,26 +72,54 @@ var ErrProfileReferenceNotFound = errors.New("the profile has no reference row i
 // ends. It must run under RunInTransaction. The rows are locked one at a time in profile ID order,
 // so two transactions that lock an overlapping set wait for each other rather than deadlock.
 func LockProfileReferences(ctx context.Context, orgID string, profileIDs ...string) error {
+	_, err := lockProfileReferences(ctx, orgID, profileIDs)
+	return err
+}
+
+// ErrProfileMerged says a locked profile has been merged into another profile, its master.
+var ErrProfileMerged = errors.New("the profile has been merged into another profile")
+
+// LockReferenceProfiles locks the reference rows of the profiles as LockProfileReferences does, and
+// returns ErrProfileMerged when one of them is no longer a reference profile. The rows stay locked,
+// so no merge changes that until the transaction ends.
+func LockReferenceProfiles(ctx context.Context, orgID string, profileIDs ...string) error {
+	statuses, err := lockProfileReferences(ctx, orgID, profileIDs)
+	if err != nil {
+		return err
+	}
+	for _, profileID := range profileIDs {
+		if statuses[profileID] != constants.ReferenceProfile {
+			return fmt.Errorf("profile %s: %w", profileID, ErrProfileMerged)
+		}
+	}
+	return nil
+}
+
+// lockProfileReferences does the work of LockProfileReferences, and returns the status of each
+// profile it locked.
+func lockProfileReferences(ctx context.Context, orgID string, profileIDs []string) (map[string]string, error) {
 	if dbModel.TxFromContext(ctx) == nil {
-		return errors.New("locking profile references needs a transaction")
+		return nil, errors.New("locking profile references needs a transaction")
 	}
 
 	dbClient, err := provider.NewDBProvider().GetDBClient()
 	if err != nil {
-		return fmt.Errorf("failed to get the database client to lock profile references: %w", err)
+		return nil, fmt.Errorf("failed to get the database client to lock profile references: %w", err)
 	}
 	defer func() { _ = dbClient.Close() }()
 
 	ordered := append([]string(nil), profileIDs...)
 	sort.Strings(ordered)
+	statuses := make(map[string]string, len(ordered))
 	for _, profileID := range ordered {
 		results, err := dbClient.ExecuteQueryContext(ctx, scripts.LockProfileReference, profileID, orgID)
 		if err != nil {
-			return fmt.Errorf("failed to lock the reference of profile %s: %w", profileID, err)
+			return nil, fmt.Errorf("failed to lock the reference of profile %s: %w", profileID, err)
 		}
 		if len(results) == 0 {
-			return fmt.Errorf("profile %s: %w", profileID, ErrProfileReferenceNotFound)
+			return nil, fmt.Errorf("profile %s: %w", profileID, ErrProfileReferenceNotFound)
 		}
+		statuses[profileID] = fmt.Sprintf("%v", results[0]["profile_status"])
 	}
-	return nil
+	return statuses, nil
 }

@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -310,6 +311,86 @@ func Test_ResolveReviewTask_WhenProfileMergedSince(t *testing.T) {
 		assertStatus(t, taskID, constants.ReviewStatusCancelled)
 		assertApart(t, orgID, candidate)
 	})
+
+	t.Run("rejecting a task still pending withdraws it", func(t *testing.T) {
+		// A rejection of the merged profile would never be read again, and its master holds data
+		// the administrator did not see.
+		orgID, incoming, candidate, other := setupPair(t, "reject-withdraws-task")
+		master, err := workers.MergeMatchedProfiles(ctx, orgID, other, incoming, constants.MergeReasonAutoMerge)
+		require.NoError(t, err)
+		require.NotNil(t, master)
+		taskID := raiseTask(t, orgID, incoming, candidate)
+
+		err = irService.GetIdentityResolutionService().ResolveReviewTask(ctx, orgID, taskID, false, "admin", "")
+		assertClientError(t, err, http.StatusConflict, errors2.IRCannotMerge.Code)
+		assertStatus(t, taskID, constants.ReviewStatusCancelled)
+		rejections, err := irStore.GetRejectionsForProfile(ctx, orgID, candidate.ProfileID)
+		require.NoError(t, err)
+		assert.Empty(t, rejections)
+	})
+
+	t.Run("rejecting a task of profiles still apart records the rejection", func(t *testing.T) {
+		orgID, incoming, candidate, _ := setupPair(t, "reject-records-rejection")
+		taskID := raiseTask(t, orgID, incoming, candidate)
+
+		require.NoError(t, irService.GetIdentityResolutionService().ResolveReviewTask(ctx, orgID, taskID, false,
+			"admin", ""))
+		assertStatus(t, taskID, constants.ReviewStatusRejected)
+		rejections, err := irStore.GetRejectionsForProfile(ctx, orgID, candidate.ProfileID)
+		require.NoError(t, err)
+		assert.Contains(t, rejections, incoming.ProfileID)
+	})
+}
+
+// Test_ResolveReviewTask_TwoAdministratorsAtOnce checks two administrators who approve the same task at
+// the same moment. The task is approved once: the merge locks the task after the profiles and finds it
+// resolved, so the second approval is told so rather than withdrawing the task the first one approved.
+func Test_ResolveReviewTask_TwoAdministratorsAtOnce(t *testing.T) {
+	ctx := context.Background()
+	for round := range 5 {
+		org := newOrg(fmt.Sprintf("two-approvals-%d", round))
+		incoming := insertBareProfile(t, org, "", map[string]interface{}{"name": "Jo"})
+		candidate := insertBareProfile(t, org, "", map[string]interface{}{"name": "Kim"})
+		orgID := setup.TestOrg(t, org).ID
+		require.NoError(t, irStore.InsertReviewTask(ctx, orgID, irModel.ReviewTask{
+			OrgID:              orgID,
+			IncomingProfileID:  incoming.ProfileID,
+			CandidateProfileID: candidate.ProfileID,
+			MatchScore:         0.8,
+			Status:             constants.ReviewStatusPending,
+			ScoreBreakdown:     map[string]float64{"traits.name": 1.0},
+		}))
+		pending, _, err := irStore.GetPendingReviewTasks(ctx, orgID, 10)
+		require.NoError(t, err)
+		require.Len(t, pending, 1)
+		taskID := pending[0].ID
+
+		results := make([]error, 2)
+		var wg sync.WaitGroup
+		for i := range results {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results[i] = irService.GetIdentityResolutionService().ResolveReviewTask(ctx, orgID, taskID, true,
+					fmt.Sprintf("admin-%d", i), "")
+			}()
+		}
+		wg.Wait()
+
+		succeeded := 0
+		for _, err := range results {
+			if err == nil {
+				succeeded++
+				continue
+			}
+			assertClientError(t, err, http.StatusConflict, errors2.IRReviewTaskResolved.Code)
+		}
+		assert.Equal(t, 1, succeeded, "round %d: one approval merges the profiles", round)
+		task, err := irStore.GetReviewTaskByID(ctx, taskID)
+		require.NoError(t, err)
+		require.NotNil(t, task)
+		assert.Equal(t, constants.ReviewStatusApproved, task.Status, "round %d", round)
+	}
 }
 
 // Test_ReviewTask_CanBeRecreatedAfterCancellation checks that a pair cancelled by a cascade

@@ -117,6 +117,8 @@ var mssqlStatements = map[string]string{
 		SET status = $1, resolved_at = SYSUTCDATETIME(), resolved_by = $2, resolution_notes = $3
 		WHERE id = $4`,
 
+	"CDS-IDR-25": `SELECT status FROM review_tasks WITH (UPDLOCK, ROWLOCK) WHERE id = $1`,
+
 	"CDS-IDR-19": `MERGE rejection_pairs WITH (HOLDLOCK) AS t
 		USING (SELECT $3 AS profile_id_1, $4 AS profile_id_2) AS s
 			ON t.profile_id_1 = s.profile_id_1 AND t.profile_id_2 = s.profile_id_2

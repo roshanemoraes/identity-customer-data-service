@@ -72,6 +72,10 @@ const DefaultQueueSize = 1000
 // when identity_resolution.unification_workers is not set.
 const DefaultUnificationWorkers = 5
 
+// DefaultSQLiteUnificationWorkers is DefaultUnificationWorkers on SQLite, which takes one writer at
+// a time.
+const DefaultSQLiteUnificationWorkers = 1
+
 // DefaultLimit is the default number of items a list request returns.
 const DefaultLimit = 50
 

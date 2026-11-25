@@ -78,7 +78,10 @@ func Test_PairEvaluatedByTwoWorkers_RaisesOneReviewTask(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				irWorker.ResolveProfileAsync(ctx, ref.ID, profileModel.Profile{ProfileID: id, OrgID: ref.ID})
+				job := profileModel.Profile{ProfileID: id, OrgID: ref.ID}
+				if err := irWorker.ResolveProfileAsync(ctx, ref.ID, job); err != nil {
+					t.Errorf("resolve profile: %v", err)
+				}
 			}()
 		}
 	}

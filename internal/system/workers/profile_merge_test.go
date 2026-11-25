@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	irStore "github.com/wso2/identity-customer-data-service/internal/identity_resolution/store"
 )
 
 // referenceOf returns the status and the parent of a profile's reference row.
@@ -197,9 +199,9 @@ func TestMergeCancelsThePendingReviewTasksOfBothProfiles(t *testing.T) {
 	require.Equal(t, "PENDING", taskStatus(t, db, "task-unrelated"))
 }
 
-// TestReviewedMergeKeepsItsOwnTask covers the merge of an approved review task. It cancels the
-// other tasks of the two profiles, but leaves the approved one for the caller to resolve.
-func TestReviewedMergeKeepsItsOwnTask(t *testing.T) {
+// TestReviewedMergeApprovesItsOwnTask covers the merge of an approved review task. The merge marks
+// that task approved in its transaction, and cancels the other tasks of the two profiles.
+func TestReviewedMergeApprovesItsOwnTask(t *testing.T) {
 	db := candidateWorkerDB(t)
 	candidate := workerProfile(t, db, "candidate", "same-user", `{"email":"a"}`, time.Hour)
 	incoming := workerProfile(t, db, "incoming", "same-user", `{"email":"b"}`, 0)
@@ -207,13 +209,41 @@ func TestReviewedMergeKeepsItsOwnTask(t *testing.T) {
 	reviewTask(t, db, "task-approved", "incoming", "candidate")
 	reviewTask(t, db, "task-other", "incoming", "x")
 
-	master, err := MergeReviewedProfiles(context.Background(), tenantOrg.ID, "task-approved", candidate,
-		incoming, "test")
+	master, err := MergeReviewedProfiles(context.Background(), tenantOrg.ID,
+		ReviewApproval{TaskID: "task-approved", ResolvedBy: "admin", Notes: "same customer"},
+		candidate, incoming, "test")
 
 	require.NoError(t, err)
 	require.NotNil(t, master)
-	require.Equal(t, "PENDING", taskStatus(t, db, "task-approved"))
+	require.Equal(t, "APPROVED", taskStatus(t, db, "task-approved"))
+	var resolvedBy, notes string
+	require.NoError(t, db.QueryRow(`SELECT resolved_by, resolution_notes FROM review_tasks WHERE id = ?`,
+		"task-approved").Scan(&resolvedBy, &notes))
+	require.Equal(t, "admin", resolvedBy)
+	require.Equal(t, "same customer", notes)
 	require.Equal(t, "CANCELLED", taskStatus(t, db, "task-other"))
+}
+
+// TestReviewedMergeOfAResolvedTaskWritesNothing covers two administrators who approve the same task at
+// once. The second merge finds the task resolved when it locks it, and writes nothing.
+func TestReviewedMergeOfAResolvedTaskWritesNothing(t *testing.T) {
+	db := candidateWorkerDB(t)
+	candidate := workerProfile(t, db, "candidate", "same-user", `{"email":"a"}`, time.Hour)
+	incoming := workerProfile(t, db, "incoming", "same-user", `{"email":"b"}`, 0)
+	reviewTask(t, db, "task-approved", "incoming", "candidate")
+	_, err := db.Exec(`UPDATE review_tasks SET status = 'APPROVED' WHERE id = 'task-approved'`)
+	require.NoError(t, err)
+
+	master, err := MergeReviewedProfiles(context.Background(), tenantOrg.ID,
+		ReviewApproval{TaskID: "task-approved", ResolvedBy: "admin"}, candidate, incoming, "test")
+
+	var notPending *irStore.ReviewTaskNotPendingError
+	require.ErrorAs(t, err, &notPending)
+	require.Equal(t, "APPROVED", notPending.Status)
+	require.Nil(t, master)
+	status, parent := referenceOf(t, db, "incoming")
+	require.Equal(t, "REFERENCE_PROFILE", status)
+	require.Empty(t, parent)
 }
 
 // TestMergeWhoseTasksCannotBeCancelledWritesNothing covers a merge that fails to cancel the review

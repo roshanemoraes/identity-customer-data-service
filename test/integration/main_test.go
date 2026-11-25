@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/wso2/identity-customer-data-service/internal/system/config"
+	"github.com/wso2/identity-customer-data-service/internal/system/constants"
 	"github.com/wso2/identity-customer-data-service/internal/system/database"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/provider"
 	"github.com/wso2/identity-customer-data-service/internal/system/log"
@@ -75,6 +76,11 @@ func TestMain(m *testing.M) {
 		},
 		DataSource: config.DataSourceConfig{
 			Type: dbType,
+		},
+		// SQLite defaults to one worker. The suite runs the server default on every datasource, so
+		// it covers merges that run at the same time on SQLite too.
+		IdentityResolution: config.IdentityResolutionConfig{
+			UnificationWorkers: constants.DefaultUnificationWorkers,
 		},
 	}
 	config.OverrideCDSRuntime(conf)

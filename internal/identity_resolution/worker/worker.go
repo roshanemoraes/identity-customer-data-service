@@ -34,6 +34,7 @@ import (
 	profileStore "github.com/wso2/identity-customer-data-service/internal/profile/store"
 	"github.com/wso2/identity-customer-data-service/internal/system/config"
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
+	"github.com/wso2/identity-customer-data-service/internal/system/database"
 	"github.com/wso2/identity-customer-data-service/internal/system/log"
 	"github.com/wso2/identity-customer-data-service/internal/system/workers"
 	urModel "github.com/wso2/identity-customer-data-service/internal/unification_rules/model"
@@ -41,14 +42,19 @@ import (
 )
 
 // ResolveProfileAsync looks for profiles that match the profile under the organization's active unification
-// rules, and merges them or raises review tasks. It logs failures rather than returning them.
-func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel.Profile) {
+// rules, and merges them or raises review tasks.
+//
+// It returns the database failures that stopped the evaluation, so that the caller can run it again when
+// they are transient. Running it again is safe: what it already did is found and kept, or done once more.
+func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel.Profile) error {
 	logger := log.GetLogger()
 
 	freshProfile, err := profileStore.GetProfile(ctx, profile.ProfileID, orgID)
-	if err != nil || freshProfile == nil {
-		logger.Error(fmt.Sprintf("AsyncWorker: failed to fetch profile '%s', skipping", profile.ProfileID))
-		return
+	if err != nil {
+		return fmt.Errorf("fetch profile '%s': %w", profile.ProfileID, err)
+	}
+	if freshProfile == nil {
+		return nil
 	}
 
 	flatAttrs := flattenProfile(freshProfile)
@@ -56,8 +62,7 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 	// Load unification rules for blocking key generation and scoring/merge decisions.
 	rawRules, err := urService.GetUnificationRuleService().GetUnificationRules(ctx, orgID)
 	if err != nil {
-		logger.Error(fmt.Sprintf("AsyncWorker: failed to load unification rules for org '%s'", orgID), log.Error(err))
-		return
+		return fmt.Errorf("load the unification rules of org '%s': %w", orgID, err)
 	}
 
 	rules := urModel.ActiveSortedByPriority(rawRules, constants.AttributeTypePrimitiveExact,
@@ -67,7 +72,7 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 		rules = urModel.AsExactMatching(rules)
 	}
 	if len(rules) == 0 {
-		return
+		return nil
 	}
 
 	// Check if profile has any attributes matching active rules.
@@ -82,18 +87,26 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 		// An update can remove the last value a rule matched on. Returning without touching
 		// the index would leave the profile discoverable under its old keys, so it keeps
 		// matching on data it no longer has.
-		if err := irStore.DeleteBlockingKeys(ctx, orgID, freshProfile.ProfileID); err != nil {
+		err := irStore.DeleteBlockingKeys(ctx, orgID, freshProfile.ProfileID)
+		if database.IsTransient(err) {
+			return fmt.Errorf("clear the stale blocking keys of '%s': %w", freshProfile.ProfileID, err)
+		}
+		if err != nil {
 			logger.Warn(fmt.Sprintf("AsyncWorker: failed to clear stale blocking keys for '%s'",
 				freshProfile.ProfileID), log.Error(err))
 		}
-		return
+		return nil
 	}
 
 	// Generate blocking keys from unification rules.
 	blockingKeys := engine.GenerateBlockingKeysFromRules(flatAttrs, rules)
 
 	if len(blockingKeys) > 0 {
-		if err := irStore.UpsertBlockingKeys(ctx, freshProfile.ProfileID, orgID, blockingKeys); err != nil {
+		err := irStore.UpsertBlockingKeys(ctx, freshProfile.ProfileID, orgID, blockingKeys)
+		if database.IsTransient(err) {
+			return fmt.Errorf("index profile '%s' in blocking_keys: %w", freshProfile.ProfileID, err)
+		}
+		if err != nil {
 			logger.Warn(fmt.Sprintf("AsyncWorker: failed to index profile '%s' in blocking_keys",
 				freshProfile.ProfileID), log.Error(err))
 		}
@@ -121,13 +134,12 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 	}
 
 	if len(candidateIDs) == 0 {
-		return
+		return nil
 	}
 
 	candidateProfiles, err := irStore.GetProfilesByIDs(ctx, candidateIDs)
 	if err != nil {
-		logger.Error(fmt.Sprintf("AsyncWorker: failed to load candidate profiles for org '%s'", orgID), log.Error(err))
-		return
+		return fmt.Errorf("load the candidate profiles of '%s': %w", freshProfile.ProfileID, err)
 	}
 
 	profileMap := make(map[string]*model.ProfileData, len(candidateProfiles))
@@ -181,7 +193,7 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 	}
 
 	if len(candidateIDs) == 0 {
-		return
+		return nil
 	}
 
 	thresholds := model.LoadThresholds(ctx, orgID)
@@ -215,7 +227,7 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 	}
 
 	if len(scored) == 0 {
-		return
+		return nil
 	}
 
 	sort.Slice(scored, func(i, j int) bool {
@@ -227,7 +239,11 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 	// back goes to an administrator again, never straight to a merge: the new evidence can
 	// score for an automatic merge, and merging on it would overturn a human decision with
 	// no human involved.
-	rejections, _ := irStore.GetRejectionsForProfile(ctx, orgID, freshProfile.ProfileID)
+	rejections, err := irStore.GetRejectionsForProfile(ctx, orgID, freshProfile.ProfileID)
+	if err != nil {
+		// Without them, a pair an administrator rejected could merge.
+		return fmt.Errorf("load the rejections of '%s': %w", freshProfile.ProfileID, err)
+	}
 	reconsidered := map[string]bool{}
 	if len(rejections) > 0 {
 		var filtered []scoredCandidate
@@ -250,7 +266,7 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 		}
 		scored = filtered
 		if len(scored) == 0 {
-			return
+			return nil
 		}
 	}
 
@@ -267,7 +283,7 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 		}
 		scored = mergeable
 		if len(scored) == 0 {
-			return
+			return nil
 		}
 	}
 
@@ -280,16 +296,21 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 
 		if decision == constants.DecisionAutoMerge && !reconsidered[sc.id] {
 			matchedProfile, loadErr := profileStore.GetProfile(ctx, sc.id, orgID)
+			if database.IsTransient(loadErr) {
+				return fmt.Errorf("load matched profile '%s' for auto-merge: %w", sc.id, loadErr)
+			}
 			if loadErr != nil || matchedProfile == nil {
 				logger.Error(fmt.Sprintf("AsyncWorker: failed to load matched profile '%s' for auto-merge", sc.id))
-				insertReviewTask(
+				if err := insertReviewTask(
 					ctx,
 					orgID,
 					freshProfile.ProfileID,
 					sc.withReason(model.ReasonAutoMergeFailed),
 					thresholds.ManualReview,
 					rejections,
-				)
+				); err != nil {
+					return err
+				}
 				continue
 			}
 
@@ -320,33 +341,42 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 				logger.Info(fmt.Sprintf("AsyncWorker: '%s' or '%s' was merged by another job after they were "+
 					"scored, so both are resolved again", matchedProfile.ProfileID, freshProfile.ProfileID))
 				workers.RequeueAsMasters(ctx, orgID, matchedProfile.ProfileID, freshProfile.ProfileID)
-				return
+				return nil
+			}
+			if database.IsTransient(mergeErr) {
+				// The merge wrote nothing, and it can succeed when the evaluation runs again.
+				return fmt.Errorf("auto-merge '%s' → '%s': %w", matchedProfile.ProfileID, freshProfile.ProfileID,
+					mergeErr)
 			}
 			if mergeErr != nil {
 				// Merge failed so not mark merged=true, not write audit log, not
 				// cascade-cancel related tasks.
 				logger.Error(fmt.Sprintf("AsyncWorker: auto-merge failed for '%s' → '%s' — falling back to review task",
 					matchedProfile.ProfileID, freshProfile.ProfileID), log.Error(mergeErr))
-				insertReviewTask(
+				if err := insertReviewTask(
 					ctx,
 					orgID,
 					freshProfile.ProfileID,
 					sc.withReason(model.ReasonAutoMergeFailed),
 					thresholds.ManualReview,
 					rejections,
-				)
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			if survivingMaster == nil {
 				// Pair turned out to be unmergeable — surface it for review instead.
-				insertReviewTask(
+				if err := insertReviewTask(
 					ctx,
 					orgID,
 					freshProfile.ProfileID,
 					sc.withReason(model.ReasonAutoMergeFailed),
 					thresholds.ManualReview,
 					rejections,
-				)
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			merged = true
@@ -355,7 +385,10 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 			break
 		}
 
-		insertReviewTask(ctx, orgID, freshProfile.ProfileID, sc, thresholds.ManualReview, rejections)
+		if err := insertReviewTask(ctx, orgID, freshProfile.ProfileID, sc, thresholds.ManualReview,
+			rejections); err != nil {
+			return err
+		}
 	}
 
 	if merged {
@@ -378,13 +411,17 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 				continue
 			}
 			if decision == constants.DecisionAutoMerge || decision == constants.DecisionManualReview {
-				insertReviewTask(ctx, orgID, mergedMaster.ProfileID, sc, thresholds.ManualReview, rejections)
+				if err := insertReviewTask(ctx, orgID, mergedMaster.ProfileID, sc, thresholds.ManualReview,
+					rejections); err != nil {
+					return err
+				}
 			}
 		}
 		if evaluateMasterAgain {
 			workers.EnqueueProfileForProcessing(profileModel.Profile{ProfileID: mergedMaster.ProfileID, OrgID: orgID})
 		}
 	}
+	return nil
 }
 
 // insertReviewTask records a pair for an administrator to decide on.
@@ -392,13 +429,16 @@ func ResolveProfileAsync(ctx context.Context, orgID string, profile profileModel
 // The caller passes the rejections it already loaded rather than having this re-read them:
 // one evaluation can raise several tasks, and re-fetching the same set per task was a query
 // each time for data already in memory.
+//
+// It returns the error of a task it failed to raise on a transient database failure, which raising it
+// again can get past. Other failures are logged.
 func insertReviewTask(ctx context.Context, orgID string, incomingProfileID string, sc scoredCandidate,
-	agreementThreshold float64, rejections map[string]model.Rejection) {
+	agreementThreshold float64, rejections map[string]model.Rejection) error {
 	logger := log.GetLogger()
 
 	if rejection, wasRejected := rejections[sc.id]; wasRejected &&
 		!rejection.ShouldReconsider(sc.similarity, sc.breakdown, agreementThreshold) {
-		return
+		return nil
 	}
 
 	explanation := sc.explanation
@@ -414,21 +454,35 @@ func insertReviewTask(ctx context.Context, orgID string, incomingProfileID strin
 	// Workers evaluating both profiles of a pair at the same time would each miss the other's
 	// task and raise one in each direction. Raising the task under the locks a merge takes runs
 	// the two one after the other, so the second finds the first and flips it.
+	//
+	// A merge of either profile runs before the task or after it. One after it cancels the task.
+	// One before it leaves a profile merged, and the task is not raised: the merge had no task to
+	// cancel, and the profile it merged is never evaluated again.
 	err := profileStore.RunInTransaction(ctx, func(txCtx context.Context) error {
-		if err := profileStore.LockProfileReferences(txCtx, orgID, incomingProfileID, sc.id); err != nil {
+		if err := profileStore.LockReferenceProfiles(txCtx, orgID, incomingProfileID, sc.id); err != nil {
 			return err
 		}
 		return irStore.InsertReviewTask(txCtx, orgID, task)
 	})
+	if errors.Is(err, profileStore.ErrProfileMerged) {
+		logger.Info(fmt.Sprintf("AsyncWorker: '%s' or '%s' was merged after they were scored, so no review "+
+			"task was raised and both are resolved again", incomingProfileID, sc.id))
+		workers.RequeueAsMasters(ctx, orgID, incomingProfileID, sc.id)
+		return nil
+	}
 	if errors.Is(err, profileStore.ErrProfileReferenceNotFound) {
 		logger.Info(fmt.Sprintf("AsyncWorker: '%s' or '%s' was deleted after they were scored, so no review "+
 			"task was raised", incomingProfileID, sc.id))
-		return
+		return nil
+	}
+	if database.IsTransient(err) {
+		return fmt.Errorf("create review task for '%s' → '%s': %w", incomingProfileID, sc.id, err)
 	}
 	if err != nil {
 		logger.Error(fmt.Sprintf("AsyncWorker: failed to create review task for '%s' → '%s'",
 			incomingProfileID, sc.id), log.Error(err))
 	}
+	return nil
 }
 
 // scoredCandidate is a candidate that cleared the review threshold, with what it was

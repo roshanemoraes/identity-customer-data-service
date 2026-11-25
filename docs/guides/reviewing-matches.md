@@ -74,14 +74,16 @@ Scope `identity_resolution:update`. `decision` is `APPROVED` or `REJECTED`;
 | `APPROVED` | The two profiles are merged, as an automatic merge would have. The merge records the rule that drove it, so the profile shows why it was combined |
 | `REJECTED` | The profiles stay apart, and CDD remembers that they are different people |
 
-Resolving a task that is already resolved is a 409.
+Resolving a task that is already resolved is a 409. When two administrators
+resolve the same task at once, one decision is applied and the other gets the
+409.
 
 A merge cancels the tasks of its profiles (see
 [Tasks that resolve themselves](#tasks-that-resolve-themselves)), so a task
 whose profile was merged is normally no longer pending. If it still is — it was
-raised by an earlier version, or it was approved while the merge ran — approving
-it is a 409 as well. The task is marked `CANCELLED` rather than applied to the
-merged result, and both profiles are evaluated again.
+raised by an earlier version, or it was resolved while the merge ran — approving
+or rejecting it is a 409 as well. The task is marked `CANCELLED` rather than
+applied to the merged result, and both profiles are evaluated again.
 
 ### Rejected pairs stay rejected
 

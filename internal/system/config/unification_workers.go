@@ -22,17 +22,24 @@ import (
 	"fmt"
 
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
+	"github.com/wso2/identity-customer-data-service/internal/system/database"
 )
 
 // ResolveUnificationWorkers returns how many queued profiles one instance unifies at the same
-// time. Zero, which is also what an omitted setting gives, returns the default. A negative value
-// is refused.
-func ResolveUnificationWorkers(cfg IdentityResolutionConfig) (int, error) {
+// time. Zero, which is also what an omitted setting gives, returns the default of the datasource
+// dataSourceType. A negative value is refused.
+//
+// The default is one on SQLite, which takes one writer at a time, so that further workers would
+// only wait for each other, and constants.DefaultUnificationWorkers on a server database.
+func ResolveUnificationWorkers(cfg IdentityResolutionConfig, dataSourceType string) (int, error) {
 	if cfg.UnificationWorkers < 0 {
 		return 0, fmt.Errorf("identity_resolution.unification_workers must not be negative, got %d",
 			cfg.UnificationWorkers)
 	}
 	if cfg.UnificationWorkers == 0 {
+		if database.ResolveType(dataSourceType) == database.TypeSQLite {
+			return constants.DefaultSQLiteUnificationWorkers, nil
+		}
 		return constants.DefaultUnificationWorkers, nil
 	}
 	return cfg.UnificationWorkers, nil

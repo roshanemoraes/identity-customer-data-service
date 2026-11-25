@@ -23,6 +23,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/wso2/identity-customer-data-service/internal/identity_resolution/model"
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
+	dbModel "github.com/wso2/identity-customer-data-service/internal/system/database/model"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/provider"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/scripts"
 	errors2 "github.com/wso2/identity-customer-data-service/internal/system/errors"
@@ -275,6 +277,48 @@ func GetReviewTaskByID(ctx context.Context, taskID string) (*model.ReviewTask, e
 
 	task := scanReviewTask(results[0])
 	return &task, nil
+}
+
+// ReviewTaskNotPendingError says a review task was resolved or withdrawn before it could be resolved.
+type ReviewTaskNotPendingError struct {
+	// Status is the status the task has now.
+	Status string
+}
+
+func (e *ReviewTaskNotPendingError) Error() string {
+	return fmt.Sprintf("the review task is no longer pending: it is %s", e.Status)
+}
+
+// ErrReviewTaskNotFound says a review task to lock does not exist.
+var ErrReviewTaskNotFound = errors.New("the review task does not exist")
+
+// LockPendingReviewTask locks the review task taskID until the transaction in ctx ends, so that only
+// one caller resolves it. It returns a *ReviewTaskNotPendingError when the task is no longer pending.
+//
+// It must run under a transaction. A caller that also locks profile references locks them first,
+// as a merge does.
+func LockPendingReviewTask(ctx context.Context, taskID string) error {
+	if dbModel.TxFromContext(ctx) == nil {
+		return errors.New("locking a review task needs a transaction")
+	}
+
+	dbClient, err := provider.NewDBProvider().GetDBClient()
+	if err != nil {
+		return fmt.Errorf("failed to get the database client to lock review task %s: %w", taskID, err)
+	}
+	defer func() { _ = dbClient.Close() }()
+
+	results, err := dbClient.ExecuteQueryContext(ctx, scripts.IRLockReviewTask, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to lock review task %s: %w", taskID, err)
+	}
+	if len(results) == 0 {
+		return fmt.Errorf("review task %s: %w", taskID, ErrReviewTaskNotFound)
+	}
+	if status := fmt.Sprintf("%v", results[0]["status"]); status != constants.ReviewStatusPending {
+		return &ReviewTaskNotPendingError{Status: status}
+	}
+	return nil
 }
 
 // GetPendingReviewTasks returns up to pageSize of the organization's pending review tasks, newest first, and

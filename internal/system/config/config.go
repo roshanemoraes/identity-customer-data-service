@@ -363,7 +363,8 @@ type IdentityResolutionConfig struct {
 	FuzzyMatchingEnabled bool `yaml:"fuzzy_matching_enabled"`
 
 	// UnificationWorkers is how many queued profiles one instance unifies at the same time.
-	// Zero, which is also what an omitted key gives, means constants.DefaultUnificationWorkers.
+	// Zero, which is also what an omitted key gives, means constants.DefaultUnificationWorkers, or
+	// constants.DefaultSQLiteUnificationWorkers on SQLite.
 	// A negative value is refused at start.
 	UnificationWorkers int `yaml:"unification_workers"`
 }
